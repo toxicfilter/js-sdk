@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    # `engines` says >=20, and that is not arbitrary: `verifySignature()` reaches
+    # `globalThis.crypto.subtle`, which is only global without a flag from Node 19, and
+    # Node 18 has been out of support since April 2025. Claiming 18 would have been a
+    # promise that breaks on the one function nobody can work around.
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']
+
+    name: Node ${{ matrix.node }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # The client has no dependencies; this installs TypeScript, which is what checks
+      # that the hand-written declarations still describe it.
+      - run: npm install
+
+      - run: npm test
+
+  types:
+    runs-on: ubuntu-latest
+    name: Declarations
+
+    # Once, on the newest Node: `index.d.ts` is written by hand, so the way it fails is by
+    # falling behind the client. `type-tests/api.ts` uses the whole typed surface the way a
+    # consumer would, and the compiler is what notices when a field is missing from it.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: npm install
+
+      - run: npm run typecheck

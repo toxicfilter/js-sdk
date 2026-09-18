@@ -1,0 +1,49 @@
+{
+  "name": "@edulazaro/toxicfilter-sdk",
+  "version": "1.0.0",
+  "description": "The official JavaScript client for the ToxicFilter content moderation API.",
+  "keywords": [
+    "moderation",
+    "toxicity",
+    "spam",
+    "content-moderation",
+    "toxicfilter"
+  ],
+  "license": "MIT",
+  "author": "Edu Lazaro (https://edulazaro.com)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toxicfilter/js-sdk.git"
+  },
+  "bugs": "https://github.com/toxicfilter/js-sdk/issues",
+  "homepage": "https://toxicfilter.com/docs/sdks",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
