@@ -21,6 +21,14 @@ export interface Signal {
   spans?: number[]
 }
 
+/** The model was asked for and deliberately not run on this call. */
+export interface ModelNotRead {
+  asked: boolean
+  read: boolean
+  /** Why not, e.g. `conversation_sampling`. */
+  why: string
+}
+
 export interface PolicyRef {
   slug: string
   version: number
@@ -65,12 +73,26 @@ export interface VerdictContext {
   history?: { seen?: number; blocked?: number; adjustment?: number }
 }
 
-export interface RequestOptions {
-  /** The languages your site is in, up to five. Without it a wall of the wrong language cannot be told from a normal comment. */
-  locales?: string[]
-  /** Where it was posted: `comment`, `review`, `listing`, `bio`. The same sentence does not weigh the same in each. */
-  surface?: string
-  /** Whether the model may run. Text and images default to true, the rest to false. */
+/** The rules for one call instead of a stored policy. */
+export interface InlineRules {
+  thresholds?: Record<string, { review?: number; block?: number }>
+  topics?: Record<string, { review?: number; block?: number }>
+  leads?: Record<string, { review?: number; block?: number }>
+  terms?: { block?: string[]; review?: string[]; allow?: string[] }
+  surfaces?: Record<string, Record<string, { review?: number; block?: number }>>
+  /** What your business does, for the model to judge `off_topic` against. 500 characters. */
+  business?: string
+}
+
+/**
+ * What every judging endpoint takes, whatever it judges.
+ *
+ * Each endpoint then adds its own fields below, taken from the server's rules for that
+ * kind. The server refuses a field an endpoint has no rule for with a 422 `unknown_field`,
+ * so one shared options type let a request compile that could only ever fail.
+ */
+export interface CommonOptions {
+  /** Whether the model may run. Text, images and conversations default to true, signups to false. */
   ai?: boolean
   /** Your own id for the thing being judged. Send it: it is how you find the verdict later. */
   reference?: string
@@ -96,18 +118,53 @@ export interface RequestOptions {
    * A name that is not a real category, subject or lead type is refused rather than
    * dropped: a line that acts on nothing looks exactly like a line that works.
    */
-  rules?: {
-    thresholds?: Record<string, { review?: number; block?: number }>
-    topics?: Record<string, { review?: number; block?: number }>
-    leads?: Record<string, { review?: number; block?: number }>
-    terms?: { block?: string[]; review?: string[]; allow?: string[] }
-    surfaces?: Record<string, Record<string, { review?: number; block?: number }>>
-    /** What your business does, for the model to judge `off_topic` against. 500 characters. */
-    business?: string
-  }
-  /** Supply your own, or one is generated per call. */
+  rules?: InlineRules
+  /** Supply your own, or one is generated per call. Sent as a header, never in the body. */
   idempotencyKey?: string
 }
+
+/** The languages your site is in, up to five. Without it a wall of the wrong language cannot be told from a normal comment. */
+export interface WithLocales {
+  locales?: string[]
+}
+
+/** Where it was posted: `comment`, `review`, `listing`, `bio`. The same sentence does not weigh the same in each. */
+export interface WithSurface {
+  surface?: string
+}
+
+/** No model reads this kind, so `ai: true` is a 422 `ai_unavailable`. */
+export interface WithoutModel {
+  ai?: false
+}
+
+export interface TextOptions extends CommonOptions, WithLocales, WithSurface {}
+export interface EmailOptions extends Omit<CommonOptions, 'ai'>, WithSurface, WithoutModel {}
+export interface NameOptions extends Omit<CommonOptions, 'ai'>, WithLocales, WithSurface, WithoutModel {}
+export interface UrlOptions extends Omit<CommonOptions, 'ai'>, WithSurface, WithoutModel {}
+export interface SignupFields extends CommonOptions, WithLocales, WithSurface {
+  name?: string
+  email?: string
+  bio?: string
+}
+export interface ImageOptions extends CommonOptions, WithSurface {}
+/** No `surface`: the endpoint IS the surface, and the server prohibits one of your own. */
+export interface PromptOptions extends CommonOptions, WithLocales {}
+export interface ConversationOptions extends CommonOptions, WithLocales, WithSurface {}
+
+/**
+ * Defaults for every item of a batch. No `reference`: each item names itself, and the
+ * envelope has no rule for one.
+ */
+export interface BatchOptions extends Omit<CommonOptions, 'reference'>, WithLocales, WithSurface {}
+
+/**
+ * The options every endpoint used to share, kept so code that named it still compiles.
+ *
+ * @deprecated Use the endpoint's own type (`TextOptions`, `EmailOptions`, ...): this one
+ * admits fields some endpoints refuse.
+ */
+export interface RequestOptions extends CommonOptions, WithLocales, WithSurface {}
 
 export declare class Verdict {
   raw: Record<string, unknown>
@@ -144,7 +201,13 @@ export declare class Verdict {
   readonly usedAi: boolean
   readonly cached: boolean
   readonly charged: number
-  readonly creditsRemaining: number
+  /** Credits left after this call. `null` where the answer carries no balance: batch rows and stored records. */
+  readonly creditsRemaining: number | null
+  /**
+   * Present when the model was asked for and deliberately not run, e.g. `why:
+   * 'conversation_sampling'`. Not `degraded`, which says nobody could read it. `null` otherwise.
+   */
+  readonly model: ModelNotRead | null
   readonly policy: PolicyRef
   /** The content with the personal data masked, when you asked for it. */
   readonly redacted: string | null
@@ -152,7 +215,11 @@ export declare class Verdict {
   readonly context: VerdictContext
   /** What a trialled policy would have said. Never what happened. */
   readonly shadow: ShadowRef | null
-  /** Where a held verdict stands. Filled by `records()` and `record()`. */
+  /**
+   * Where a held verdict stands. Filled by `record()`, `resolve()` and `feedback()`; the
+   * `records()` listing carries the verdicts without it, and without `kind`, `createdAt` or
+   * `batchId`.
+   */
   readonly review: ReviewState
   readonly reviewState: 'open' | 'approved' | 'rejected' | null
   readonly resolved: boolean
@@ -169,6 +236,12 @@ export declare class Verdict {
   readonly tookMs: number
 }
 
+export interface BatchFailure {
+  code: string
+  message?: string
+  fields?: Record<string, string[]>
+}
+
 export declare class BatchResult {
   raw: Record<string, unknown>
   constructor(raw: Record<string, unknown>)
@@ -177,7 +250,12 @@ export declare class BatchResult {
   readonly finished: boolean
   /** Keyed by the position each item was sent in. */
   readonly verdicts: Map<number, Verdict>
-  readonly failures: Map<number, { code: string; message: string; fields?: Record<string, string[]> }>
+  /**
+   * By the position each item was sent in. A failure that names no item (a whole chunk the
+   * workers lost, `chunk_failed`) is keyed -1, -2, ... in the order it arrived: no item has
+   * a negative position, so it can never be mistaken for one.
+   */
+  readonly failures: Map<number, BatchFailure>
   readonly count: number
   readonly processed: number
   readonly failed: number
@@ -231,22 +309,27 @@ export interface ClientOptions {
   sleep?: (ms: number) => Promise<void>
 }
 
-export interface BatchItem extends RequestOptions {
-  kind: 'text' | 'email' | 'name' | 'signup' | 'image' | 'url' | 'conversation'
-  content?: string
-  address?: string
-  name?: string
-  bio?: string
-  email?: string
-  url?: string
+/**
+ * One element of a batch: the same fields its own endpoint takes, plus `kind`.
+ *
+ * No `idempotencyKey`: an item is checked field by field and a key in it fails that item.
+ * The key belongs to the batch call.
+ */
+type ItemOf<K extends string, T> = { kind: K } & Omit<T, 'idempotencyKey'>
+
+export type BatchItem =
+  | ItemOf<'text', TextOptions & { content: string }>
+  | ItemOf<'email', EmailOptions & { address: string }>
+  | ItemOf<'name', NameOptions & { name: string }>
+  | ItemOf<'signup', Omit<SignupFields, 'idempotencyKey'>>
+  | ItemOf<'url', UrlOptions & { url: string }>
+  | ItemOf<'conversation', ConversationOptions & { messages: ConversationMessage[] }>
   /**
-   * A picture by value: base64 or a `data:` URI. An item is JSON, so a batched image
-   * arrives inline or as a `url`; the multipart `file` form only exists on `/v1/image`, and
-   * nothing in this client sends it.
+   * A picture by address or by value (base64 or a `data:` URI), exactly one. An item is
+   * JSON, so the multipart `file` form only exists on `/v1/image`, and nothing in this
+   * client sends it.
    */
-  data?: string
-  messages?: ConversationMessage[]
-}
+  | ItemOf<'image', ImageOptions & ({ url: string; data?: never } | { data: string; url?: never })>
 
 export interface ConversationMessage {
   /** Your own opaque id for whoever wrote it. Never a name. */
@@ -258,10 +341,10 @@ export interface ConversationMessage {
 
 export declare class ToxicFilter {
   constructor(apiKey: string, options?: ClientOptions)
-  text(content: string, options?: RequestOptions): Promise<Verdict>
-  email(address: string, options?: RequestOptions): Promise<Verdict>
-  name(name: string, options?: RequestOptions): Promise<Verdict>
-  signup(fields: { name?: string; email?: string; bio?: string } & RequestOptions): Promise<Verdict>
+  text(content: string, options?: TextOptions): Promise<Verdict>
+  email(address: string, options?: EmailOptions): Promise<Verdict>
+  name(name: string, options?: NameOptions): Promise<Verdict>
+  signup(fields: SignupFields): Promise<Verdict>
   /**
    * A picture, by address or by value. An http or https address is fetched by us; anything
    * else is the file itself and goes out as `data`, which is not a guess: `url` accepts
@@ -269,36 +352,43 @@ export declare class ToxicFilter {
    */
   image(
     url: string | Uint8Array | ArrayBuffer | ArrayBufferView | Blob,
-    options?: RequestOptions,
+    options?: ImageOptions,
   ): Promise<Verdict>
   /** A picture you hold rather than one you have published. Bytes, or an already encoded string. */
   imageData(
     data: Uint8Array | ArrayBuffer | ArrayBufferView | Blob | string,
-    options?: RequestOptions,
+    options?: ImageOptions,
   ): Promise<Verdict>
   /** Text on its way into your own model: prompt injection, plus everything else. */
-  prompt(content: string, options?: RequestOptions): Promise<Verdict>
+  prompt(content: string, options?: PromptOptions): Promise<Verdict>
   /** One link, judged as a link. Never fetched: "looks like what it says", not "safe". */
-  url(url: string, options?: RequestOptions): Promise<Verdict>
+  url(url: string, options?: UrlOptions): Promise<Verdict>
   /**
    * A message with what came before it. The last one is judged; the rest is context.
    * Pile-ons and approaches to children exist nowhere else.
    */
-  conversation(messages: ConversationMessage[], options?: RequestOptions): Promise<Verdict>
-  batch(items: BatchItem[], options?: RequestOptions & { async?: boolean }): Promise<BatchResult>
-  batchAsync(items: BatchItem[], options?: RequestOptions): Promise<BatchResult>
+  conversation(messages: ConversationMessage[], options?: ConversationOptions): Promise<Verdict>
+  batch(items: BatchItem[], options?: BatchOptions & { async?: boolean }): Promise<BatchResult>
+  batchAsync(items: BatchItem[], options?: BatchOptions): Promise<BatchResult>
   batchStatus(batchId: string, query?: { limit?: number; after?: number }): Promise<BatchResult>
+  /**
+   * The review queue. Each verdict carries what it was decided and why; its review state,
+   * feedback, `kind` and dates come from `record(id)`.
+   */
   records(query?: {
     state?: 'open' | 'approved' | 'rejected' | 'resolved' | 'any'
     decision?: 'allow' | 'review' | 'block'
     feedback?: 'correct' | 'false_positive' | 'false_negative' | 'none'
     reference?: string
+    /** Your own id for whoever wrote it, as sent in `actor`. */
+    actor?: string
     kind?: string
     from?: string
     to?: string
     limit?: number
     before?: string
   }): Promise<{ records: Verdict[]; nextBefore: string | null }>
+  /** One stored verdict in full, with its review state, feedback and any retained content. */
   record(id: string): Promise<Verdict>
   /**
    * An options object, unlike the PHP and Python clients, which take the moderator

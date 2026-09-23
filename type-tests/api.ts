@@ -96,9 +96,62 @@ async function webhooks(): Promise<void> {
   void [ours, event]
 }
 
+/**
+ * Requests the server refuses with a 422 `unknown_field` or `prohibited`, refused here first.
+ *
+ * Each endpoint takes its own fields (`SubjectRules::for()` on the server), and one shared
+ * options type let every one of these compile and fail at run time instead.
+ */
+async function refusedByTheServer(): Promise<void> {
+  // @ts-expect-error - an address has no language: /v1/email takes no `locales`
+  await tf.email('a@example.com', { locales: ['en'] })
+  // @ts-expect-error - nor does a link
+  await tf.url('https://example.test', { locales: ['en'] })
+  // @ts-expect-error - /v1/prompt IS the surface; a surface of your own is prohibited
+  await tf.prompt('hello', { surface: 'comment' })
+  // @ts-expect-error - no model reads an address, so `ai: true` is a 422 `ai_unavailable`
+  await tf.email('a@example.com', { ai: true })
+  // @ts-expect-error - the batch envelope has no `reference`; each item carries its own
+  await tf.batch([{ kind: 'text', content: 'a' }], { reference: 'r' })
+  // @ts-expect-error - nor does the async one
+  await tf.batchAsync([{ kind: 'text', content: 'a' }], { reference: 'r' })
+  // @ts-expect-error - the idempotency key belongs to the call, never to an item
+  await tf.batch([{ kind: 'text', content: 'a', idempotencyKey: 'k' }])
+  // @ts-expect-error - an email item takes `address`, not `content`
+  await tf.batch([{ kind: 'email', content: 'a@example.com' }])
+
+  // What each endpoint does take still compiles.
+  await tf.email('a@example.com', { surface: 'signup', ai: false, reference: 'r', idempotencyKey: 'k' })
+  await tf.url('https://example.test', { surface: 'bio' })
+  await tf.prompt('hello', { locales: ['en'], rules: { thresholds: { prompt_injection: { block: 0.6 } } } })
+  await tf.name('Ana', { locales: ['es'], surface: 'profile' })
+  await tf.image('https://cdn.example.test/a.jpg', { surface: 'avatar' })
+  await tf.conversation([{ content: 'hi' }], { locales: ['es'], surface: 'dm' })
+  await tf.batch(
+    [
+      { kind: 'text', content: 'a', reference: 'c_1', locales: ['en'] },
+      { kind: 'email', address: 'a@example.com' },
+      { kind: 'image', data: 'AAAA' },
+      { kind: 'conversation', messages: [{ content: 'hi' }] },
+    ],
+    { locales: ['en'], surface: 'comment', idempotencyKey: 'k', async: false },
+  )
+  await tf.records({ actor: 'user_8812' })
+}
+
+function whatAVerdictSays(verdict: Verdict): void {
+  // Batch rows and stored records carry no balance, so it can be unknown.
+  const left: number | null = verdict.creditsRemaining
+  // @ts-expect-error - and unknown is not zero
+  const zero: number = verdict.creditsRemaining
+  const model: { asked: boolean; read: boolean; why: string } | null = verdict.model
+
+  void [left, zero, model]
+}
+
 // There is no `isToxic`, in any of the three clients, and that is a product decision
 // rather than an omission. If one ever appears, this line stops compiling.
 // @ts-expect-error - fifteen categories do not collapse into one boolean
 void (null as unknown as Verdict).isToxic
 
-void [everyEndpoint, errorsAreClasses, webhooks]
+void [everyEndpoint, errorsAreClasses, webhooks, refusedByTheServer, whatAVerdictSays]

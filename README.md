@@ -61,7 +61,8 @@ try {
 ## When the model is down
 
 A verdict reached without the model because the provider was failing comes back with
-`degraded` set, and is billed as the cheap call. It is a separate field from `used_ai` on
+`degraded` set, and is billed as the check alone: a check costs 1 credit, and only a model
+reading adds its tokens, rounded up. It is a separate field from `used_ai` on
 purpose: one says the cheap detectors were enough, the other says nobody read it, and only
 the first is reassuring. Hold or queue what matters to you when you see it.
 
@@ -89,6 +90,7 @@ verdict.context    // repeats, near-duplicates, the actor's record and what it m
 verdict.shadow     // what a policy you are trialling would have said. Never what happened
 verdict.facts      // noticed, not a finding: a language, an age signal, a fingerprint
 verdict.degraded   // part of the pipeline could not run
+verdict.model      // { asked, read, why } when the model was deliberately not run, else null
 ```
 
 `redacted` is usually worth more than a refusal: throwing a whole comment away because it
@@ -147,7 +149,7 @@ const batch = await tf.batch([
 ], { ai: false })
 
 batch.verdicts.forEach((verdict, index) => { /* ... */ })
-batch.failures.forEach((error, index) => { /* ... */ })
+batch.failures.forEach((error, index) => { /* ... */ })   // index -1, -2... names no item
 
 // A backfill: queued, answered immediately, polled or webhooked.
 const queued = await tf.batchAsync(tenThousandComments)
@@ -162,7 +164,7 @@ while (page.hasMore) {
 }
 
 // The review queue.
-const { records } = await tf.records({ state: 'open' })
+const { records } = await tf.records({ state: 'open' })   // the verdicts; review state via record(id)
 await tf.resolve(id, 'approved', { moderator: 'ana@example.com' })
 await tf.feedback(id, 'false_positive')   // free, and the only honest measure we have
 
@@ -176,9 +178,17 @@ held.content       // only when your policy keeps it, and only until it expires
 await tf.keys()               // prefixes, modes, last use. Never a secret.
 await tf.revokeKey(id)        // including the one you are calling with. There is no create.
 
-await tf.usage()   // credits, windows, prices. Works at zero credits.
+await tf.usage()   // credits, the monthly window, prices. Works at zero credits.
 await tf.ping()
 ```
+
+## What is not an answer
+
+Only a `2xx` carrying a JSON object with a decision in it is a verdict. A redirect (an
+`http://` baseUrl), a proxy's HTML page, an empty body or a connection cut off halfway
+through one throws a retryable `ServerError` instead, and the timeout covers the body as
+well as the headers. A moderation client that read those as `allow` would publish whatever
+it was asked about on the day something between it and the API went wrong.
 
 ## Webhooks
 

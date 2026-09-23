@@ -10,7 +10,7 @@
  * from your backend and send the verdict to the page.
  */
 
-export const VERSION = '1.0.0'
+export const VERSION = '1.0.1'
 
 /** Anything the API refused. Carries the status, the code and the whole body. */
 export class ToxicFilterError extends Error {
@@ -123,6 +123,8 @@ function errorFor(status, payload) {
   return new ToxicFilterError(...args)
 }
 
+const DECISIONS = ['allow', 'review', 'block']
+
 /**
  * One answer.
  *
@@ -135,9 +137,22 @@ export class Verdict {
     this.raw = raw ?? {}
   }
 
-  /** `allow`, `review` or `block`. */
+  /**
+   * `allow`, `review` or `block`.
+   *
+   * Throws when the answer carries none, rather than assuming one. It used to default to
+   * `allow`, so anything that was not a verdict (an empty body, a proxy's page) read as
+   * "publish it". A moderation client that fails open publishes exactly what it was asked
+   * about on the day something between it and the API goes wrong.
+   */
   get decision() {
-    return this.raw.decision ?? 'allow'
+    const decision = this.raw.decision
+
+    if (!DECISIONS.includes(decision)) {
+      throw new ToxicFilterError(`This answer carries no decision (got ${JSON.stringify(decision)}).`, 0, 'no_decision', this.raw)
+    }
+
+    return decision
   }
 
   /** @returns {boolean} Nothing crossed a line. Publish it. */
@@ -263,9 +278,25 @@ export class Verdict {
     return this.raw.credits?.charged ?? this.raw.charged ?? 0
   }
 
-  /** @returns {number} Credits left after this call. */
+  /**
+   * @returns {?number} Credits left after this call, or null when the answer does not say.
+   *
+   * Batch rows and stored records carry no balance, and reporting 0 for them read as an
+   * account with nothing left.
+   */
   get creditsRemaining() {
-    return this.raw.credits?.remaining ?? 0
+    return this.raw.credits?.remaining ?? null
+  }
+
+  /**
+   * `{ asked, read, why }` when the model was asked for and deliberately not run on this
+   * call (`why: 'conversation_sampling'`), or null.
+   *
+   * Not the same as `degraded`, which says nobody COULD read it. Without this, a message
+   * the model chose to skip looked exactly like one the cheap detectors had settled.
+   */
+  get model() {
+    return this.raw.model ?? null
   }
 
   /** Which rules produced this, by name and version. Worth logging. */
@@ -331,7 +362,9 @@ export class Verdict {
    * Where this verdict stands in the queue: the state, who decided and when.
    *
    * Only `review` opens an entry, so a verdict that was allowed outright has nothing here.
-   * Filled by `records()` and `record()` rather than by the call that produced it.
+   * Filled by `record()`, `resolve()` and `feedback()`. Not by `records()`: the listing
+   * carries each verdict without its review state, `kind`, `createdAt` or `batchId`, so
+   * read one with `record(id)` when you need them.
    */
   get review() {
     return this.raw.review ?? {}
@@ -422,7 +455,7 @@ export class BatchResult {
     return this.raw.batch_id ?? ''
   }
 
-  /** @returns {string} `queued`, `running`, `completed` or `failed`. */
+  /** @returns {string} `queued`, `running` or `completed`. */
   get status() {
     return this.raw.status ?? 'queued'
   }
@@ -443,13 +476,33 @@ export class BatchResult {
     return out
   }
 
-  /** @returns {Object<number, Object>} The items that could not be judged, by index. */
+  /**
+   * The items that could not be judged, keyed by the position each was sent in.
+   *
+   * Read from BOTH lists: a sync answer files item errors in `results` and `errors`, and a
+   * batch read back keeps `results` for the rows that were judged and the errors only in
+   * `errors`. Reading one or the other lost every failure of a batch that also had
+   * verdicts. An error present in both is listed once.
+   *
+   * A failure that names no item (a chunk the workers lost, `chunk_failed`) is keyed -1,
+   * -2, ... in the order it arrived. No item has a negative position, so it can never be
+   * mistaken for, or overwrite, the failure of a real item.
+   *
+   * @returns {Map<number, Object>}
+   */
   get failures() {
     const out = new Map()
+    let unplaced = 0
 
-    ;(this.raw.results ?? this.raw.errors ?? []).forEach((row, i) => {
-      if (row.error) out.set(row.index ?? i, row.error)
-    })
+    for (const row of [...(this.raw.results ?? []), ...(this.raw.errors ?? [])]) {
+      if (!row?.error) continue
+
+      if (Number.isInteger(row.index)) {
+        if (!out.has(row.index)) out.set(row.index, row.error)
+      } else {
+        out.set(-(++unplaced), row.error)
+      }
+    }
 
     return out
   }
@@ -561,12 +614,12 @@ export class ToxicFilter {
 
   /** A comment, a review, a message, a description. */
   async text(content, options = {}) {
-    return new Verdict(await this.#post('/api/v1/text', { content, ...options }))
+    return this.#verdict('/api/v1/text', { content, ...options })
   }
 
   /** Judge an address, including a malformed one, which is the point. */
   async email(address, options = {}) {
-    return new Verdict(await this.#post('/api/v1/email', { address, ...options }))
+    return this.#verdict('/api/v1/email', { address, ...options })
   }
 
   /**
@@ -577,12 +630,12 @@ export class ToxicFilter {
      * @returns {Promise<Verdict>}
      */
   async name(name, options = {}) {
-    return new Verdict(await this.#post('/api/v1/name', { name, ...options }))
+    return this.#verdict('/api/v1/name', { name, ...options })
   }
 
   /** Name, email and bio judged together, because the combination is the signal. */
   async signup(fields) {
-    return new Verdict(await this.#post('/api/v1/signup', fields))
+    return this.#verdict('/api/v1/signup', fields)
   }
 
   /**
@@ -596,7 +649,7 @@ export class ToxicFilter {
       return this.imageData(url, options)
     }
 
-    return new Verdict(await this.#post('/api/v1/image', { url, ...options }))
+    return this.#verdict('/api/v1/image', { url, ...options })
   }
 
   /**
@@ -612,7 +665,7 @@ export class ToxicFilter {
    * the policy says about held content: you already have the file.
    */
   async imageData(data, options = {}) {
-    return new Verdict(await this.#post('/api/v1/image', { data: await toBase64(data), ...options }))
+    return this.#verdict('/api/v1/image', { data: await toBase64(data), ...options })
   }
 
   /**
@@ -620,7 +673,7 @@ export class ToxicFilter {
    * everything a comment is checked for.
    */
   async prompt(content, options = {}) {
-    return new Verdict(await this.#post('/api/v1/prompt', { content, ...options }))
+    return this.#verdict('/api/v1/prompt', { content, ...options })
   }
 
   /**
@@ -628,7 +681,7 @@ export class ToxicFilter {
    * it says", not "safe".
    */
   async url(url, options = {}) {
-    return new Verdict(await this.#post('/api/v1/url', { url, ...options }))
+    return this.#verdict('/api/v1/url', { url, ...options })
   }
 
   /**
@@ -641,12 +694,24 @@ export class ToxicFilter {
    * Up to fifty, oldest first.
    */
   async conversation(messages, options = {}) {
-    return new Verdict(await this.#post('/api/v1/conversation', { messages, ...options }))
+    return this.#verdict('/api/v1/conversation', { messages, ...options })
   }
 
-  /** Many things in one call, answered now. */
+  /**
+   * Many things in one call, answered now.
+   *
+   * An idempotency key inside an item is removed before sending: the server checks each
+   * item field by field and would fail that item for it. The key is the call's, passed in
+   * `options`.
+   */
   async batch(items, options = {}) {
-    return new BatchResult(await this.#post('/api/v1/batch', { items, ...options }))
+    const clean = items.map((item) => {
+      const { idempotencyKey, idempotency_key, ...rest } = item ?? {}
+
+      return rest
+    })
+
+    return new BatchResult(await this.#post('/api/v1/batch', { items: clean, ...options }))
   }
 
   /** The same, queued. Answers immediately; the work happens on our side. */
@@ -665,7 +730,12 @@ export class ToxicFilter {
     return new BatchResult(await this.#get(`/api/v1/batches/${encodeURIComponent(batchId)}`, query))
   }
 
-  /** What is waiting for a person. */
+  /**
+   * What is waiting for a person.
+   *
+   * Each row is the verdict as it was reached; its review state, feedback, `kind` and dates
+   * are not in the listing. `record(id)` has them.
+   */
   async records(query = {}) {
     const body = await this.#get('/api/v1/records', query)
 
@@ -705,7 +775,10 @@ export class ToxicFilter {
     return new Verdict(await this.#post(`/api/v1/records/${encodeURIComponent(id)}/feedback`, payload))
   }
 
-  /** Credits, windows, prices. Free, and it answers even when the allowance is gone. */
+  /**
+   * Credits, the monthly window, prices. Free, and it answers even when the allowance is
+   * gone. A check costs 1 credit; a model reading adds the tokens it used, rounded up.
+   */
   async usage() {
     return this.#get('/api/v1/usage')
   }
@@ -723,6 +796,22 @@ export class ToxicFilter {
   /** Is the key good, is the service up. Costs nothing. */
   async ping() {
     return this.#get('/api/v1/ping')
+  }
+
+  /**
+   * A judging call, refused unless the answer is a verdict.
+   *
+   * A 2xx JSON object with no decision in it is not an allow; it is something that is not
+   * this API answering. Retryable, like any other answer that should not have happened.
+   */
+  async #verdict(path, payload) {
+    const body = await this.#post(path, payload)
+
+    if (!DECISIONS.includes(body.decision)) {
+      throw new ServerError('ToxicFilter answered without a decision. Nothing was judged as far as this client can tell.', 200, 'no_decision', body)
+    }
+
+    return new Verdict(body)
   }
 
   async #post(path, payload) {
@@ -766,12 +855,34 @@ export class ToxicFilter {
       let error
 
       try {
-        const response = await this.#once(method, url, headers, body)
-        const decoded = await readJson(response)
+        const { status, text, location } = await this.#once(method, url, headers, body)
 
-        if (response.status < 400) return decoded
+        // Only a 2xx carrying a JSON object is an answer. Anything else between 200 and 399
+        // used to be read as one, and with `{}` as the body: a redirect (an `http://`
+        // baseUrl), a proxy's HTML page or a body cut off halfway all came back as an
+        // `allow`. The refusals keep their status, so a 502 page is still a server error.
+        if (status >= 200 && status < 300) {
+          const decoded = parseObject(text)
 
-        error = errorFor(response.status, decoded)
+          if (decoded) return decoded
+
+          throw new ServerError(
+            `ToxicFilter answered ${status} with a body that is not a JSON object${text === '' ? ' (it was empty)' : ''}.`,
+            status,
+            'malformed_response',
+          )
+        }
+
+        if (status < 400) {
+          throw new ServerError(
+            `ToxicFilter answered with a redirect (${status})${location ? ` to ${location}` : ''}, which is never an answer. ` +
+              'Check the baseUrl: it should be https://toxicfilter.com.',
+            status,
+            'redirected',
+          )
+        }
+
+        error = errorFor(status, parseObject(text) ?? {})
       } catch (e) {
         if (e instanceof ToxicFilterError) {
           error = e
@@ -792,27 +903,71 @@ export class ToxicFilter {
     }
   }
 
+  /**
+   * One attempt: the request AND its body, under one timeout.
+   *
+   * The body is read inside the timed section. The timer used to stop when the headers
+   * arrived, so a server that sent them and then stalled held the call open for ever. The
+   * read is also raced against the abort itself, because not every `fetch` a caller may
+   * pass in rejects a body read when its signal fires.
+   *
+   * A body that fails halfway (a connection reset on a 200) is a ServerError: it is not
+   * an answer, and asking again with the same idempotency key is safe.
+   */
   async #once(method, url, headers, body) {
     // A request with no timeout is a request that can hang a worker for as long as
     // somebody else's network feels like it.
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeout)
+    let timer
+
+    const expired = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new ServerError(`ToxicFilter did not answer within ${this.timeout} ms.`, 0, 'timeout')
+        controller.abort(error)
+        reject(error)
+      }, this.timeout)
+    })
 
     try {
-      return await this.fetch(url, { method, headers, body, signal: controller.signal, redirect: 'manual' })
+      return await Promise.race([
+        (async () => {
+          const response = await this.fetch(url, { method, headers, body, signal: controller.signal, redirect: 'manual' })
+          const location = response.headers?.get?.('location') ?? null
+
+          let text
+
+          try {
+            text = await response.text()
+          } catch (e) {
+            if (e instanceof ToxicFilterError) throw e
+            // A refusal whose body could not be read is still a refusal, typed by its status.
+            if (response.status >= 400) return { status: response.status, text: '', location }
+
+            throw new ServerError(`ToxicFilter's answer was cut off: ${e?.message ?? e}`, response.status, 'body_unreadable')
+          }
+
+          return { status: response.status, text, location }
+        })(),
+        expired,
+      ])
     } finally {
       clearTimeout(timer)
     }
   }
 }
 
-async function readJson(response) {
+/**
+ * The body as a JSON object, or null when it is not one.
+ *
+ * Null rather than `{}`, so that "not an answer" can never be mistaken for an empty one.
+ */
+function parseObject(text) {
   try {
-    const text = await response.text()
+    const value = JSON.parse(text)
 
-    return text ? JSON.parse(text) : {}
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
   } catch {
-    return {}
+    return null
   }
 }
 
@@ -846,7 +1001,10 @@ export async function verifyWebhook(payload, header, secret, { tolerance = 300, 
   const timestamp = Number.parseInt(parts.t ?? '0', 10)
   const signature = parts.v1 ?? ''
 
-  if (!Number.isFinite(timestamp) || timestamp <= 0 || !signature) return false
+  // Exactly a SHA-256 in hex, checked before decoding. `parseInt` reads `+a` or ` a` as a
+  // hex byte and a Uint8Array stores NaN as 0, so without this a string that is not hex at
+  // all could decode to the right bytes, and the NaN check below it could never fire.
+  if (!Number.isFinite(timestamp) || timestamp <= 0 || !/^[0-9a-f]{64}$/i.test(signature)) return false
 
   // The timestamp is signed WITH the body, so a delivery captured today cannot be
   // replayed tomorrow.
@@ -863,13 +1021,11 @@ export async function verifyWebhook(payload, header, secret, { tolerance = 300, 
     ['verify'],
   )
 
-  const signed = new Uint8Array(signature.length / 2)
+  const signed = new Uint8Array(32)
 
   for (let i = 0; i < signed.length; i++) {
     signed[i] = Number.parseInt(signature.slice(i * 2, i * 2 + 2), 16)
   }
-
-  if (signed.some(Number.isNaN)) return false
 
   const data = new Uint8Array([...encoder.encode(`${timestamp}.`), ...bytes])
 

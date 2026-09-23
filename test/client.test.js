@@ -549,3 +549,257 @@ test('a batch page carries its cursor', async () => {
   assert.equal(last.hasMore, false)
   assert.ok(calls[1].url.includes('after=99'))
 })
+
+/**
+ * What counts as an answer.
+ *
+ * A moderation client that reads anything it does not understand as "allow" publishes
+ * whatever it was asked about the day something between it and the API misbehaves: a
+ * baseUrl without https answered by a redirect, a captive proxy's HTML page, a connection
+ * dropped halfway through the body. Each of those came back as a clean verdict.
+ */
+function answering(respond, options = {}) {
+  const calls = []
+
+  const fetch = async (url, init) => {
+    calls.push({ url, init })
+
+    return respond(calls.length, init)
+  }
+
+  const tf = new ToxicFilter('tf_test_key', {
+    baseUrl: 'https://example.test',
+    fetch,
+    sleep: async () => {},
+    retries: 0,
+    ...options,
+  })
+
+  return { tf, calls }
+}
+
+test('a redirect is not a verdict', async () => {
+  const { tf } = answering(() => ({
+    status: 301,
+    headers: new Headers({ location: 'https://toxicfilter.com/api/v1/text' }),
+    text: async () => '',
+  }))
+
+  await assert.rejects(
+    () => tf.text('kill you'),
+    (error) => {
+      assert.ok(error instanceof ServerError)
+      assert.equal(error.status, 301)
+      assert.equal(error.retryable, true)
+      assert.match(error.message, /redirect/i)
+      return true
+    },
+  )
+})
+
+test('a page that is not json is not a verdict', async () => {
+  const { tf } = answering(() => ({ status: 200, text: async () => '<html>Sign in to the wifi</html>' }))
+
+  await assert.rejects(
+    () => tf.text('kill you'),
+    (error) => {
+      assert.ok(error instanceof ServerError)
+      assert.equal(error.status, 200)
+      assert.equal(error.retryable, true)
+      return true
+    },
+  )
+})
+
+test('an empty or non-object body is not a verdict', async () => {
+  for (const body of ['', 'null', '[]', '"allow"', '42']) {
+    const { tf } = answering(() => ({ status: 200, text: async () => body }))
+
+    await assert.rejects(() => tf.text('kill you'), ServerError, `body ${JSON.stringify(body)}`)
+  }
+})
+
+test('a body cut off halfway is not a verdict', async () => {
+  const { tf } = answering(() => ({
+    status: 200,
+    text: async () => {
+      throw new TypeError('terminated: other side closed')
+    },
+  }))
+
+  await assert.rejects(() => tf.text('kill you'), ServerError)
+})
+
+test('an answer with no decision is not an allow', async () => {
+  const { tf } = answering(() => ({ status: 200, text: async () => JSON.stringify({ id: 'mod_1', scores: {} }) }))
+
+  await assert.rejects(() => tf.text('kill you'), ServerError)
+})
+
+test('a verdict never invents a decision', async () => {
+  const { Verdict } = await import('../index.js')
+  const verdict = new Verdict({ scores: {} })
+
+  assert.throws(() => verdict.decision)
+  assert.throws(() => verdict.allowed)
+})
+
+test('a malformed success is retried like any other server failure', async () => {
+  const { tf, calls } = answering(
+    (n) => (n === 1 ? { status: 200, text: async () => '<html></html>' } : { status: 200, text: async () => JSON.stringify(VERDICT) }),
+    { retries: 1 },
+  )
+
+  const verdict = await tf.text('hello')
+
+  assert.equal(verdict.needsReview, true)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].init.headers['Idempotency-Key'], calls[1].init.headers['Idempotency-Key'])
+})
+
+test('a refusal with a body that is not json is still typed by its status', async () => {
+  const { tf } = answering(() => ({ status: 502, text: async () => '<html>Bad gateway</html>' }))
+
+  await assert.rejects(() => tf.text('hello'), ServerError)
+})
+
+test('the timeout covers the body, not just the headers', async () => {
+  // Headers arrive, then nothing: a body that stalls must end in the same timeout a
+  // silent server does, or a worker waits for ever.
+  const { tf } = answering(() => ({ status: 200, text: () => new Promise(() => {}) }), { timeout: 20 })
+
+  let guard
+  const outcome = await Promise.race([
+    tf.text('hello').then(
+      () => 'resolved',
+      (error) => error,
+    ),
+    new Promise((resolve) => {
+      guard = setTimeout(() => resolve('hung'), 1000)
+    }),
+  ])
+  clearTimeout(guard)
+
+  assert.ok(outcome instanceof ServerError, `expected a ServerError, got ${outcome}`)
+  assert.equal(outcome.retryable, true)
+})
+
+test('the model block says it was deliberately not asked', async () => {
+  const { tf } = client([[200, { ...VERDICT, model: { asked: true, read: false, why: 'conversation_sampling' } }]])
+
+  const verdict = await tf.conversation([{ author: 'a', content: 'hi' }])
+
+  assert.deepEqual(verdict.model, { asked: true, read: false, why: 'conversation_sampling' })
+})
+
+test('no model block is null', async () => {
+  const { tf } = client([[200, VERDICT]])
+
+  assert.equal((await tf.text('x')).model, null)
+})
+
+test('credits left is unknown, not zero, where the answer does not carry it', async () => {
+  // Batch rows and stored records carry no balance. Zero would read as "out of credits".
+  const { Verdict } = await import('../index.js')
+
+  assert.equal(new Verdict({ decision: 'allow', charged: 1 }).creditsRemaining, null)
+  assert.equal(new Verdict(VERDICT).creditsRemaining, 940)
+})
+
+test('a batch read back reports its failures from both lists', async () => {
+  // `results` holds the rows that were judged; the item errors live in `errors`. Reading
+  // one list or the other lost every validation failure of a batch that also had verdicts.
+  const { tf } = client([[200, {
+    batch_id: 'bat_01',
+    status: 'completed',
+    results: [{ index: 0, ...VERDICT }],
+    errors: [
+      { index: 1, error: { code: 'validation_failed', message: 'This item was not judged.' } },
+      { error: { code: 'chunk_failed', message: '3 items in this batch could not be processed.' } },
+      { error: { code: 'chunk_failed', message: '2 more.' } },
+    ],
+  }]])
+
+  const result = await tf.batchStatus('bat_01')
+
+  assert.equal(result.verdicts.size, 1)
+  assert.equal(result.failures.get(1).code, 'validation_failed')
+  // A row with no index is not item 0 or item 1; it gets a key no item can have.
+  assert.equal(result.failures.get(-1).code, 'chunk_failed')
+  assert.equal(result.failures.get(-2).message, '2 more.')
+  assert.equal(result.failures.size, 3)
+})
+
+test('a sync batch lists an item error once though both lists carry it', async () => {
+  const error = { index: 1, error: { code: 'validation_failed' } }
+  const { tf } = client([[200, {
+    batch_id: 'bat_01',
+    status: 'completed',
+    results: [{ index: 0, ...VERDICT }, error],
+    errors: [error],
+  }]])
+
+  const result = await tf.batch([{ kind: 'text', content: 'a' }, { kind: 'text' }])
+
+  assert.equal(result.failures.size, 1)
+  assert.equal(result.failures.get(1).code, 'validation_failed')
+  assert.equal(result.verdicts.size, 1)
+})
+
+test('an idempotency key never travels inside a batch item', async () => {
+  // The server refuses an item with a field it does not know, so a key sent there fails
+  // the item; the key belongs to the call.
+  const { tf, calls } = client([[200, { batch_id: 'bat_01', status: 'completed', results: [] }]])
+
+  await tf.batch([{ kind: 'text', content: 'a', idempotencyKey: 'k1', idempotency_key: 'k2' }], { idempotencyKey: 'call-1' })
+
+  assert.deepEqual(calls[0].body.items[0], { kind: 'text', content: 'a' })
+  assert.equal(calls[0].key, 'call-1')
+})
+
+test('a v1 that is not sixty-four hex characters is refused', async () => {
+  const at = Math.floor(Date.now() / 1000)
+  const good = createHmac('sha256', SECRET).update(`${at}.${BODY}`).digest('hex')
+
+  // `parseInt('zz', 16)` is NaN, and a Uint8Array stores NaN as 0, so the old NaN check
+  // could never fire and a malformed signature reached the comparison as zeros.
+  for (const v1 of ['zz'.repeat(32), `${good}00`, good.slice(0, 62), `${good.slice(0, 62)}g0`]) {
+    assert.equal(await verifyWebhook(BODY, `t=${at},v1=${v1}`, SECRET), false, v1)
+  }
+
+  // An odd length made `new Uint8Array(31.5)` throw instead of answering false.
+  assert.equal(await verifyWebhook(BODY, `t=${at},v1=${good.slice(0, 63)}`, SECRET), false)
+
+  assert.equal(await verifyWebhook(BODY, `t=${at},v1=${good.toUpperCase()}`, SECRET), true)
+})
+
+test('a v1 that only parses as hex is not accepted as the real one', async () => {
+  // `parseInt('+a', 16)` is 10, so a byte 0x0a written `+a` decoded to the right value and a
+  // string that is not hex at all verified. Find a timestamp whose signature has such a byte.
+  let at = Math.floor(Date.now() / 1000)
+  let good
+
+  for (;; at--) {
+    good = createHmac('sha256', SECRET).update(`${at}.${BODY}`).digest('hex')
+    if (/^(?:..)*?0/.test(good) && good.match(/^(?:..)*?0/)[0].length % 2 === 1) break
+  }
+
+  const position = good.match(/^(?:..)*?0/)[0].length - 1
+  const forged = `${good.slice(0, position)}+${good.slice(position + 1)}`
+
+  assert.equal(await verifyWebhook(BODY, `t=${at},v1=${forged}`, SECRET, { now: () => at * 1000 }), false)
+})
+
+test('the version is 1.0.1 everywhere it is written', async () => {
+  const { VERSION } = await import('../index.js')
+  const { readFileSync } = await import('node:fs')
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+
+  assert.equal(VERSION, '1.0.1')
+  assert.equal(manifest.version, VERSION)
+
+  const { tf, calls } = client([[200, VERDICT]])
+  await tf.text('x')
+
+  assert.equal(calls[0].headers['User-Agent'], 'toxicfilter-js/1.0.1')
+})
