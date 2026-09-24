@@ -16,7 +16,7 @@
     "url": "git+https://github.com/toxicfilter/js-sdk.git"
   },
   "bugs": "https://github.com/toxicfilter/js-sdk/issues",
-  "homepage": "https://toxicfilter.com/docs/sdks",
+  "homepage": "https://toxicfilter.com/docs/sdks/javascript",
   "type": "module",
   "main": "index.js",
   "types": "index.d.ts",
