@@ -32,6 +32,8 @@ export interface ModelNotRead {
 export interface PolicyRef {
   slug: string
   version: number
+  /** True when the call's own `rules` were laid over the policy. */
+  overridden: boolean
 }
 
 /** What a policy being trialled would have said. Reported, never acted on. */
@@ -96,8 +98,10 @@ export interface CommonOptions {
   ai?: boolean
   /** Your own id for the thing being judged. Send it: it is how you find the verdict later. */
   reference?: string
-  /** Which of your policies to judge under. Absent means your default. */
+  /** Which of your policies to judge under. Absent means the project's, then your default. */
   policy?: string
+  /** Which of your projects the verdict is filed under. Absent means your default project. */
+  project?: string
   /**
    * Your own opaque id for whoever wrote it, never a name. With it, an account can be told
    * that a user with eight hundred clean messages deserves more benefit of the doubt than
@@ -113,7 +117,8 @@ export interface CommonOptions {
   redact?: boolean
   /**
    * The rules for this call instead of a stored policy. ONLY what you send is acted on:
-   * a category you do not mention has no line at all. Not valid together with `policy`.
+   * a category you do not mention has no line at all. Sent with `policy`, they are laid
+   * over it instead: the call wins for what it names, the policy keeps the rest.
    *
    * A name that is not a real category, subject or lead type is refused rather than
    * dropped: a line that acts on nothing looks exactly like a line that works.
@@ -177,6 +182,8 @@ export declare class Verdict {
   readonly blocked: boolean
   readonly id: string | null
   readonly reference: string | null
+  /** The project the verdict was filed under: the one you named, or your default. */
+  readonly project: string | null
   /**
    * Everything that crossed a line, worst first. Categories by their own name; whatever
    * crossed on the other two axes prefixed `topic:` or `lead:`, since its score lives in
@@ -188,6 +195,8 @@ export declare class Verdict {
   readonly signals: Signal[]
   /** Why, in words you can show the person whose content it was. */
   readonly reasons: string[]
+  /** The first reason, or null when there is none. */
+  readonly reason: string | null
   /** How much this is ABOUT a subject, 0 to 1. A separate axis from the categories. */
   readonly topics: Record<string, number>
   topic(name: string): number
@@ -246,6 +255,8 @@ export declare class BatchResult {
   raw: Record<string, unknown>
   constructor(raw: Record<string, unknown>)
   readonly id: string
+  /** The project the batch was filed under. */
+  readonly project: string | null
   readonly status: 'queued' | 'running' | 'completed'
   readonly finished: boolean
   /** Keyed by the position each item was sent in. */
@@ -312,10 +323,10 @@ export interface ClientOptions {
 /**
  * One element of a batch: the same fields its own endpoint takes, plus `kind`.
  *
- * No `idempotencyKey`: an item is checked field by field and a key in it fails that item.
- * The key belongs to the batch call.
+ * No `idempotencyKey` and no `project`: an item is checked field by field and either one in
+ * it fails that item. Both belong to the batch call.
  */
-type ItemOf<K extends string, T> = { kind: K } & Omit<T, 'idempotencyKey'>
+type ItemOf<K extends string, T> = { kind: K } & Omit<T, 'idempotencyKey' | 'project'>
 
 export type BatchItem =
   | ItemOf<'text', TextOptions & { content: string }>
@@ -371,6 +382,8 @@ export declare class ToxicFilter {
   batch(items: BatchItem[], options?: BatchOptions & { async?: boolean }): Promise<BatchResult>
   batchAsync(items: BatchItem[], options?: BatchOptions): Promise<BatchResult>
   batchStatus(batchId: string, query?: { limit?: number; after?: number }): Promise<BatchResult>
+  /** The most recent batches, newest first, without their rows. Read one with `batchStatus()`. */
+  batches(query?: { limit?: number; project?: string }): Promise<BatchResult[]>
   /**
    * The review queue. Each verdict carries what it was decided and why; its review state,
    * feedback, `kind` and dates come from `record(id)`.
@@ -380,6 +393,8 @@ export declare class ToxicFilter {
     decision?: 'allow' | 'review' | 'block'
     feedback?: 'correct' | 'false_positive' | 'false_negative' | 'none'
     reference?: string
+    /** One project's queue, by its slug. */
+    project?: string
     /** Your own id for whoever wrote it, as sent in `actor`. */
     actor?: string
     kind?: string

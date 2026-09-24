@@ -19,7 +19,7 @@ const verdict = await tf.text('Check this message', {
   reference: 'comment_9931',
 })
 
-if (verdict.blocked) return refuse()
+if (verdict.blocked) return refuse(verdict.reason) // the first reason; reasons has them all
 if (verdict.needsReview) return hold(verdict.id, verdict.reasons)
 
 publish()
@@ -66,6 +66,23 @@ reading adds its tokens, rounded up. It is a separate field from `used_ai` on
 purpose: one says the cheap detectors were enough, the other says nobody read it, and only
 the first is reassuring. Hold or queue what matters to you when you see it.
 
+## Projects
+
+An organization can moderate several sites, one project each. Name the project and the
+verdict is filed there, with its own activity, review queue and webhooks; leave it out and it
+goes to your default project. The keys and the credits are the organization's.
+
+```js
+const verdict = await tf.text(comment, { project: 'forum' })
+verdict.project // 'forum'
+
+await tf.batch(items, { project: 'forum' })   // the whole batch, on the envelope
+await tf.records({ project: 'forum' })        // one project's queue
+await tf.batches({ project: 'forum' })        // its recent batches
+```
+
+A project that does not exist is refused with an `InvalidRequest` (`unknown_project`).
+
 ## Rules without a policy
 
 Send the line you care about and nothing else is acted on. No stored policy is looked up,
@@ -78,9 +95,19 @@ const verdict = await tf.text(comment, {
 ```
 
 A category you did not mention still scores and still appears in `signals`; it just does not
-decide anything. `policy` and `rules` in the same call is a `422`, and so is a name that is
-not a real category, subject or lead type: a line that acts on nothing looks exactly like a
-line that works.
+decide anything. A name that is not a real category, subject or lead type is a `422`: a line
+that acts on nothing looks exactly like a line that works.
+
+Send `rules` together with a `policy` and they are laid over it instead: the call wins for
+what it names, the policy keeps everything else, and words are added to its lists.
+`verdict.policy` then says `overridden: true`.
+
+```js
+const verdict = await tf.text(comment, {
+  policy: 'comments',
+  rules: { thresholds: { spam: { block: 0.6 } } },
+})
+```
 
 ## The rest of the answer
 

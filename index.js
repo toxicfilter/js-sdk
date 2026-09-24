@@ -10,7 +10,7 @@
  * from your backend and send the verdict to the page.
  */
 
-export const VERSION = '1.0.1'
+export const VERSION = '1.1.0'
 
 /** Anything the API refused. Carries the status, the code and the whole body. */
 export class ToxicFilterError extends Error {
@@ -180,6 +180,11 @@ export class Verdict {
     return this.raw.reference ?? null
   }
 
+  /** The project the verdict was filed under: the one you named, or your default. */
+  get project() {
+    return typeof this.raw.project === 'string' ? this.raw.project : null
+  }
+
   /**
    * Everything that crossed a line, worst first.
    *
@@ -210,6 +215,11 @@ export class Verdict {
   /** Why, in words you can show the person whose content it was. */
   get reasons() {
     return this.signals.map((signal) => signal.reason ?? '')
+  }
+
+  /** The first reason, or null when there is none. */
+  get reason() {
+    return this.reasons.find((reason) => reason !== '') ?? null
   }
 
   /**
@@ -299,11 +309,15 @@ export class Verdict {
     return this.raw.model ?? null
   }
 
-  /** Which rules produced this, by name and version. Worth logging. */
+  /**
+   * Which rules produced this, by name and version. Worth logging. `overridden` is true
+   * when the call's own `rules` were laid over the policy.
+   */
   get policy() {
     return {
       slug: this.raw.policy?.slug ?? 'default',
       version: this.raw.policy?.version ?? 0,
+      overridden: this.raw.policy?.overridden === true,
     }
   }
 
@@ -453,6 +467,11 @@ export class BatchResult {
   /** @returns {string} The batch's own id, `bat_...`. */
   get id() {
     return this.raw.batch_id ?? ''
+  }
+
+  /** @returns {string|null} The project the batch was filed under. */
+  get project() {
+    return typeof this.raw.project === 'string' ? this.raw.project : null
   }
 
   /** @returns {string} `queued`, `running` or `completed`. */
@@ -728,6 +747,21 @@ export class ToxicFilter {
      */
   async batchStatus(batchId, query = {}) {
     return new BatchResult(await this.#get(`/api/v1/batches/${encodeURIComponent(batchId)}`, query))
+  }
+
+  /**
+   * The most recent batches, newest first, each summarised without its rows.
+   *
+   * For the caller who lost a batch id: a crashed worker, a restarted deploy. Read one in
+   * full with `batchStatus()`.
+   *
+   * @param {Object} [query] `limit` (1 to 100) and `project`.
+   * @returns {Promise<BatchResult[]>}
+   */
+  async batches(query = {}) {
+    const body = await this.#get('/api/v1/batches', query)
+
+    return (Array.isArray(body.batches) ? body.batches : []).map((row) => new BatchResult(row))
   }
 
   /**

@@ -73,7 +73,7 @@ test('it reads the answer', async () => {
   assert.equal(verdict.score('toxicity'), 0.55)
   assert.equal(verdict.score('hate'), 0)
   assert.deepEqual(verdict.reasons, ['Contains 1 profanity.'])
-  assert.deepEqual(verdict.policy, { slug: 'house', version: 4 })
+  assert.deepEqual(verdict.policy, { slug: 'house', version: 4, overridden: false })
   assert.equal(verdict.charged, 1)
 
   assert.equal(calls[0].url, 'https://example.test/api/v1/text')
@@ -790,16 +790,64 @@ test('a v1 that only parses as hex is not accepted as the real one', async () =>
   assert.equal(await verifyWebhook(BODY, `t=${at},v1=${forged}`, SECRET, { now: () => at * 1000 }), false)
 })
 
-test('the version is 1.0.1 everywhere it is written', async () => {
+test('the version is 1.1.0 everywhere it is written', async () => {
   const { VERSION } = await import('../index.js')
   const { readFileSync } = await import('node:fs')
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-  assert.equal(VERSION, '1.0.1')
+  assert.equal(VERSION, '1.1.0')
   assert.equal(manifest.version, VERSION)
 
   const { tf, calls } = client([[200, VERDICT]])
   await tf.text('x')
 
-  assert.equal(calls[0].headers['User-Agent'], 'toxicfilter-js/1.0.1')
+  assert.equal(calls[0].headers['User-Agent'], 'toxicfilter-js/1.1.0')
+})
+
+test('reason is the first reason, or null', async () => {
+  const { Verdict } = await import('../index.js')
+  const verdict = new Verdict({ decision: 'block', signals: [
+    { category: 'spam', reason: '' },
+    { category: 'spam', reason: 'Contains a referral link' },
+    { category: 'personal_data', reason: 'Contains a phone number' },
+  ] })
+
+  assert.equal(verdict.reason, 'Contains a referral link')
+  assert.equal(verdict.reasons.length, 3)
+  assert.equal(new Verdict({ decision: 'allow', signals: [] }).reason, null)
+})
+
+
+test('policy says when the rules of the call were laid over it', async () => {
+  const { tf } = client([[200, { ...VERDICT, policy: { slug: 'house', version: 4, overridden: true } }]])
+
+  const verdict = await tf.text('anything', { policy: 'house', rules: { thresholds: { spam: { block: 0.6 } } } })
+
+  assert.deepEqual(verdict.policy, { slug: 'house', version: 4, overridden: true })
+})
+
+test('it sends the project and reads it back', async () => {
+  const { tf, calls } = client([[200, { ...VERDICT, project: 'forum' }]])
+
+  const verdict = await tf.text('hello', { project: 'forum' })
+
+  assert.equal(verdict.project, 'forum')
+  assert.equal(calls[0].body.project, 'forum')
+})
+
+test('a verdict without a project says null', async () => {
+  const { tf } = client([[200, VERDICT]])
+
+  assert.equal((await tf.text('hello')).project, null)
+})
+
+test('it lists the recent batches of a project', async () => {
+  const { tf, calls } = client([[200, { batches: [{ batch_id: 'bat_1', project: 'forum', status: 'completed' }] }]])
+
+  const batches = await tf.batches({ project: 'forum' })
+
+  assert.equal(batches.length, 1)
+  assert.equal(batches[0].id, 'bat_1')
+  assert.equal(batches[0].project, 'forum')
+  assert.ok(calls[0].url.endsWith('/api/v1/batches?project=forum'))
 })
