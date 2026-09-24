@@ -13,8 +13,9 @@ jobs:
 
     permissions:
       contents: read
-      # What lets npm attest where this came from, so the package page says "Built and
-      # signed on GitHub Actions" and links to the exact commit.
+      # What npm's trusted publishing authenticates with: GitHub vouches for this repository
+      # and this workflow, so no token is stored anywhere. It also signs the provenance, so
+      # the package page says "Built and signed on GitHub Actions" and links to the commit.
       id-token: write
 
     steps:
@@ -24,6 +25,10 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm 11.5.1 or later, and the npm bundled with a Node
+      # release can be older than that.
+      - run: npm install -g npm@latest
 
       - run: npm install
 
@@ -44,13 +49,9 @@ jobs:
             exit 1
           fi
 
-      # `--provenance` is what the id-token permission above is for. `access` is already
-      # in publishConfig, and it matters: a scoped package is private by default and npm
-      # refuses it with a 402, which reads exactly like a billing problem and is not one.
-      #
-      # NODE_AUTH_TOKEN is needed for the FIRST publish. Afterwards, npm's trusted
-      # publishing can be configured on the package's settings page to trust this
-      # repository and this workflow, and then the secret can be deleted entirely.
+      # No token: the package trusts this repository and this workflow (npmjs.com, the
+      # package's Settings, Trusted Publisher). A token would also need the account's 2FA,
+      # which a workflow cannot answer. `access` is in publishConfig, and it matters: a
+      # scoped package is private by default and npm refuses it with a 402, which reads
+      # exactly like a billing problem and is not one.
       - run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
