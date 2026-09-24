@@ -790,18 +790,20 @@ test('a v1 that only parses as hex is not accepted as the real one', async () =>
   assert.equal(await verifyWebhook(BODY, `t=${at},v1=${forged}`, SECRET, { now: () => at * 1000 }), false)
 })
 
-test('the version is 1.1.1 everywhere it is written', async () => {
+// The release tag is the version: the publish workflow writes it into package.json and
+// index.js before testing. What has to hold is that the two agree, whatever the number.
+test('the version is the same everywhere it is written', async () => {
   const { VERSION } = await import('../index.js')
   const { readFileSync } = await import('node:fs')
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
-  assert.equal(VERSION, '1.1.1')
+  assert.match(VERSION, /^\d+\.\d+\.\d+$/)
   assert.equal(manifest.version, VERSION)
 
   const { tf, calls } = client([[200, VERDICT]])
   await tf.text('x')
 
-  assert.equal(calls[0].headers['User-Agent'], 'toxicfilter-js/1.1.1')
+  assert.equal(calls[0].headers['User-Agent'], `toxicfilter-js/${VERSION}`)
 })
 
 test('reason is the first reason, or null', async () => {
