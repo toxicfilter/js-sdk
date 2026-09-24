@@ -128,7 +128,7 @@ export interface CommonOptions {
   idempotencyKey?: string
 }
 
-/** The languages your site is in, up to five. Without it a wall of the wrong language cannot be told from a normal comment. */
+/** The languages your site is in, up to ten. Without it a wall of the wrong language cannot be told from a normal comment. */
 export interface WithLocales {
   locales?: string[]
 }

@@ -5,7 +5,7 @@ name: Publish
 # would make the registry's version numbers meaningless.
 on:
   push:
-    tags: ['v*']
+    tags: ['[0-9]*.[0-9]*.[0-9]*']
 
 jobs:
   publish:
@@ -32,12 +32,12 @@ jobs:
       - run: npm test
       - run: npm run typecheck
 
-      # The tag and the manifest have to say the same thing. Tagging v1.0.1 with 1.0.0 in
+      # The tag and the manifest have to say the same thing. Tagging 1.0.1 with 1.0.0 in
       # package.json publishes 1.0.0 again, which fails with a confusing "cannot publish
       # over previously published version" long after the mistake was made.
       - name: The tag matches the version
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="$GITHUB_REF_NAME"
           VERSION="$(node -p "require('./package.json').version")"
           if [ "$TAG" != "$VERSION" ]; then
             echo "Tag $GITHUB_REF_NAME does not match package.json version $VERSION."

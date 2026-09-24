@@ -1,6 +1,6 @@
 {
   "name": "@edulazaro/toxicfilter-sdk",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "The official JavaScript client for the ToxicFilter content moderation API.",
   "keywords": [
     "moderation",
