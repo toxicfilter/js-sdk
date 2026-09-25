@@ -5,11 +5,11 @@
 The official JavaScript client for [ToxicFilter](https://toxicfilter.com).
 
 ```bash
-npm install @edulazaro/toxicfilter-sdk
+npm install toxicfilter-sdk
 ```
 
 ```js
-import ToxicFilter from '@edulazaro/toxicfilter-sdk'
+import ToxicFilter from 'toxicfilter-sdk'
 
 const tf = new ToxicFilter(process.env.TOXICFILTER_KEY)
 
@@ -48,7 +48,7 @@ by `maxWait` (30000 ms by default) all the same, because a number on the wire sh
 decide how long your own request hangs.
 
 ```js
-import { QuotaExhausted, RateLimited } from '@edulazaro/toxicfilter-sdk'
+import { QuotaExhausted, RateLimited } from 'toxicfilter-sdk'
 
 try {
   await tf.text(comment)
@@ -222,7 +222,7 @@ it was asked about on the day something between it and the API went wrong.
 Your endpoint URL is public. Verify before you act:
 
 ```js
-import { webhookEvent } from '@edulazaro/toxicfilter-sdk'
+import { webhookEvent } from 'toxicfilter-sdk'
 
 const body = await request.text()          // the RAW body
 
