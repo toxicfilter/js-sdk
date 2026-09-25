@@ -10,7 +10,7 @@
  * from your backend and send the verdict to the page.
  */
 
-export const VERSION = '1.1.1'
+export const VERSION = '1.1.3'
 
 /** Anything the API refused. Carries the status, the code and the whole body. */
 export class ToxicFilterError extends Error {
