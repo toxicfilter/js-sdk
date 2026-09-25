@@ -2,6 +2,8 @@
 
 # ToxicFilter JavaScript SDK
 
+[![npm version](https://img.shields.io/npm/v/toxicfilter-sdk.svg)](https://www.npmjs.com/package/toxicfilter-sdk) [![npm downloads](https://img.shields.io/npm/dm/toxicfilter-sdk.svg)](https://www.npmjs.com/package/toxicfilter-sdk) [![license](https://img.shields.io/npm/l/toxicfilter-sdk.svg)](https://github.com/toxicfilter/js-sdk/blob/main/LICENSE) [![bundle size](https://img.shields.io/bundlephobia/minzip/toxicfilter-sdk)](https://bundlephobia.com/package/toxicfilter-sdk)
+
 The official JavaScript client for [ToxicFilter](https://toxicfilter.com).
 
 ```bash
