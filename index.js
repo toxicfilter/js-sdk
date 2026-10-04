@@ -116,9 +116,10 @@ function errorFor(status, payload) {
   if (status === 404) return new NotFound(...args)
   if (status === 422) return new InvalidRequest(...args)
   if (status === 429) return new RateLimited(...args)
-  // 409 is `idempotency_in_flight`: the earlier attempt at this very call is still
-  // running, so waiting and asking again is exactly right.
-  if (status === 409 || status >= 500) return new ServerError(...args)
+  // A 409 `idempotency_in_flight` is the earlier attempt at this very call still running,
+  // so waiting and asking again is exactly right. Every other 409 is a refusal about the
+  // record's state (`appeal_filed`, `no_restriction`), which asking again cannot change.
+  if ((status === 409 && code === 'idempotency_in_flight') || status >= 500) return new ServerError(...args)
 
   return new ToxicFilterError(...args)
 }
@@ -413,6 +414,50 @@ export class Verdict {
    */
   get feedback() {
     return this.raw.feedback ?? null
+  }
+
+  /**
+   * The statement of reasons owed to the author of restricted content (DSA, art. 17):
+   * `restriction`, `territory`, `duration`, `facts`, `automated`, `ground`, `redress`,
+   * `locale` and `text`. `null` when the project does not write statements or the verdict
+   * restricts nothing.
+   */
+  get statement() {
+    const statement = this.raw.statement
+    return statement && typeof statement === 'object' ? statement : null
+  }
+
+  /** The statement in plain words, ready to show or send to the author. */
+  get statementText() {
+    const text = this.statement?.text
+    return typeof text === 'string' ? text : null
+  }
+
+  /**
+   * The appeal against this verdict: `state`, `filed_at`, `reason`, `resolved_at`,
+   * `resolved_by` and `explanation`. `null` when nobody has appealed, and only on the answers
+   * about a record (`record()`, `resolve()`, `appeal()`, `resolveAppeal()`).
+   */
+  get appeal() {
+    const appeal = this.raw.appeal
+    return appeal && typeof appeal === 'object' ? appeal : null
+  }
+
+  /**
+   * The reasoned decision on an appeal, ready to send to the person who appealed. Only
+   * `resolveAppeal()` carries it.
+   */
+  get appealDecision() {
+    return typeof this.raw.appeal_decision === 'string' ? this.raw.appeal_decision : null
+  }
+
+  /**
+   * Where the statement was filed with the Commission's Transparency Database: `uuid` and
+   * `submitted_at`. `null` when it has not been.
+   */
+  get transparency() {
+    const transparency = this.raw.transparency
+    return transparency && typeof transparency === 'object' ? transparency : null
   }
 
   /**
@@ -807,6 +852,72 @@ export class ToxicFilter {
     if (note !== undefined) payload.note = note
 
     return new Verdict(await this.#post(`/api/v1/records/${encodeURIComponent(id)}/feedback`, payload))
+  }
+
+  /**
+   * The statement of reasons for a verdict already filed, rebuilt from the record and the
+   * rules version kept on it, in `locale` or English.
+   *
+   * A verdict that restricts nothing has none: a 409 `no_restriction`, raised as a
+   * `ToxicFilterError` and never retried.
+   *
+   * @param {string} id
+   * @param {Object} [options] `locale`.
+   * @returns {Promise<Object>}
+   */
+  async statement(id, { locale } = {}) {
+    const body = await this.#get(`/api/v1/records/${encodeURIComponent(id)}/statement`, { locale })
+
+    return body.statement ?? {}
+  }
+
+  /**
+   * The author contests the restriction. It waits in the review queue under Appeals until a
+   * person decides it with `resolveAppeal()`.
+   *
+   * One per verdict: a second, one on a verdict that restricts nothing, or one past the
+   * six-month window is a 409 (`appeal_filed`, `no_restriction`, `appeal_window_closed`).
+   *
+   * @param {string} id
+   * @param {Object} [options] `reason`: the author's own words, if a person should read them.
+   * @returns {Promise<Verdict>}
+   */
+  async appeal(id, { reason } = {}) {
+    const payload = {}
+    if (reason !== undefined) payload.reason = reason
+
+    return new Verdict(await this.#post(`/api/v1/records/${encodeURIComponent(id)}/appeal`, payload))
+  }
+
+  /**
+   * A person decides an appeal. `outcome` is `upheld` or `reversed`. The answer's
+   * `appealDecision` is the reasoned decision, ready to send to the person who appealed.
+   *
+   * @param {string} id
+   * @param {string} outcome
+   * @param {string} moderator Your own name for whoever decided.
+   * @param {string} explanation Why, in their words.
+   * @param {Object} [options] `locale`: the language of the decision text.
+   * @returns {Promise<Verdict>}
+   */
+  async resolveAppeal(id, outcome, moderator, explanation, { locale } = {}) {
+    const payload = { outcome, moderator, explanation }
+    if (locale !== undefined) payload.locale = locale
+
+    return new Verdict(await this.#post(`/api/v1/records/${encodeURIComponent(id)}/appeal/resolve`, payload))
+  }
+
+  /**
+   * A period's statements of reasons, each already in the shape the Commission's DSA
+   * Transparency Database takes. Dates are `YYYY-MM-DD`, up to 31 days, a hundred per page:
+   * pass `next` back as `after` for the following one.
+   *
+   * @param {string} since
+   * @param {Object} [options] `until`, `project` and `after`.
+   * @returns {Promise<{statements: Object[], next: ?number}>}
+   */
+  async transparency(since, { until, project, after } = {}) {
+    return this.#get('/api/v1/statements/transparency', { since, until, project, after })
   }
 
   /**

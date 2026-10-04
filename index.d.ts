@@ -59,6 +59,44 @@ export interface FeedbackRef {
   at?: string | null
 }
 
+/** One clause of your published rules, quoted from the version in force that day. */
+export interface StatementClause {
+  key: string
+  title: string
+  body: string
+  url: string | null
+}
+
+/** The statement of reasons owed to the author of restricted content (DSA, art. 17). */
+export interface Statement {
+  restrictions: string[]
+  territories: string[]
+  duration: string | null
+  facts: { flagged: string[]; reasons: string[]; source: string }
+  automated: { detection: boolean; decision: boolean }
+  ground: { type: string; policy: { slug: string; version: number } | null; clauses: StatementClause[]; terms_url: string | null }
+  redress: { internal: string | null; out_of_court: boolean; judicial: boolean }
+  locale: string
+  /** All of it in plain words, ready to show or send to the author. */
+  text: string
+}
+
+/** An appeal against a verdict (DSA, art. 20). */
+export interface AppealRef {
+  state: 'open' | 'upheld' | 'reversed'
+  filed_at: string | null
+  reason: string | null
+  resolved_at: string | null
+  resolved_by: string | null
+  explanation: string | null
+}
+
+/** Where a statement was filed with the Commission's Transparency Database. */
+export interface TransparencyRef {
+  uuid: string | null
+  submitted_at: string
+}
+
 /** The signal that is not in the message: the same thing arriving again and again. */
 export interface VerdictContext {
   /** Your own opaque id for whoever wrote it. */
@@ -236,6 +274,15 @@ export declare class Verdict {
   readonly resolvedAt: string | null
   /** What you have already told us about this verdict. */
   readonly feedback: FeedbackRef | null
+  /** The statement of reasons, when the project writes them and the verdict restricts something. */
+  readonly statement: Statement | null
+  readonly statementText: string | null
+  /** The appeal against it. Only on the answers about a record. */
+  readonly appeal: AppealRef | null
+  /** The reasoned decision on an appeal, ready to send. Only from `resolveAppeal()`. */
+  readonly appealDecision: string | null
+  /** Where the statement was filed with the Commission, once it has been. */
+  readonly transparency: TransparencyRef | null
   /** The content, when your policy keeps it and it has not expired. Only from `record()`. */
   readonly content: string | null
   readonly contentExpiresAt: string | null
@@ -415,6 +462,23 @@ export declare class ToxicFilter {
     verdict: 'correct' | 'false_positive' | 'false_negative',
     options?: { note?: string },
   ): Promise<Verdict>
+  /** A filed verdict's statement of reasons. A 409 `no_restriction` when it restricts nothing. */
+  statement(id: string, options?: { locale?: string }): Promise<Statement>
+  /** The author contests the restriction. 409 `appeal_filed`, `no_restriction` or `appeal_window_closed`. */
+  appeal(id: string, options?: { reason?: string }): Promise<Verdict>
+  /** A person decides an appeal. The answer's `appealDecision` is the text to send back. */
+  resolveAppeal(
+    id: string,
+    outcome: 'upheld' | 'reversed',
+    moderator: string,
+    explanation: string,
+    options?: { locale?: string },
+  ): Promise<Verdict>
+  /** A period's statements in the Commission's shape, up to 31 days and 100 a page. */
+  transparency(
+    since: string,
+    options?: { until?: string; project?: string; after?: number },
+  ): Promise<{ statements: Record<string, unknown>[]; next: number | null }>
   keys(): Promise<Record<string, unknown>>
   revokeKey(id: string | number): Promise<Record<string, unknown>>
   usage(): Promise<Record<string, unknown>>

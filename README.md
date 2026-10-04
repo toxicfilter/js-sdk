@@ -211,6 +211,42 @@ await tf.usage()   // credits, the monthly window, prices. Works at zero credits
 await tf.ping()
 ```
 
+## Statements of reasons and appeals
+
+Switch statements on for a project in the panel (Settings, then Statements), give your policy rules a message, and
+every block comes back with a statement of reasons: what was done, why, whether it was
+automated, which of your rules it broke and how to contest it. It helps you produce what
+articles 17, 20 and 24(5) of the Digital Services Act ask for; it is not legal advice.
+
+```js
+const verdict = await tf.text(comment, { project: 'forum' })
+
+verdict.statement       // restriction, territory, facts, automated, ground, redress, text
+verdict.statementText   // the same in plain words, ready to send to the author
+
+// Later, from the record, in another language. A verdict that restricts nothing is a 409
+// `no_restriction`, raised as a ToxicFilterError and never retried.
+const statement = await tf.statement(verdict.id, { locale: 'es' })
+
+// The author contests it. It waits in the review queue under Appeals.
+await tf.appeal(verdict.id, { reason: 'It was a recipe, not an insult.' })
+
+// A person decides, with reasons. appealDecision is the text to send back.
+const decided = await tf.resolveAppeal(verdict.id, 'reversed', 'ana', 'A recipe after all.', { locale: 'es' })
+decided.appealDecision
+decided.appeal                          // state, filed_at, reason, resolved_at, resolved_by, explanation
+;(await tf.record(id)).transparency     // uuid and submitted_at, once filed with the Commission
+
+// A period for the Commission's Transparency Database, up to 31 days, 100 a page.
+const page = await tf.transparency('2026-10-01', { until: '2026-10-31' })
+const following = await tf.transparency('2026-10-01', { until: '2026-10-31', after: page.next })
+```
+
+Appealing twice, appealing after the six-month window or resolving an appeal that is not
+open is a 409 (`appeal_filed`, `appeal_window_closed`, `no_open_appeal`). An
+`appeal.resolved` webhook tells your site the outcome, which is what puts reversed content
+back.
+
 ## What is not an answer
 
 Only a `2xx` carrying a JSON object with a decision in it is a verdict. A redirect (an

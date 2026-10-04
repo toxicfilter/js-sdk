@@ -17,6 +17,7 @@ import {
   verifyWebhook,
   webhookEvent,
   type BatchResult,
+  type Statement,
   type Verdict,
   type VerdictContext,
 } from '../index.js'
@@ -64,6 +65,14 @@ async function everyEndpoint(): Promise<void> {
   // The divergence is deliberate: same names, each language's own conventions.
   await tf.resolve('mod_1', 'approved', { moderator: 'ana', note: 'looked fine' })
   await tf.feedback('mod_1', 'false_positive')
+  const statement: Statement = await tf.statement('mod_1', { locale: 'es' })
+  const appealed: Verdict = await tf.appeal('mod_1', { reason: 'A recipe.' })
+  const appealState: string | undefined = appealed.appeal?.state
+  const decided: Verdict = await tf.resolveAppeal('mod_1', 'upheld', 'ana', 'Because.', { locale: 'es' })
+  const decisionText: string | null = decided.appealDecision
+  const statementText: string | null = decided.statementText
+  const page: { statements: Record<string, unknown>[]; next: number | null } = await tf.transparency('2026-10-01', { until: '2026-10-31' })
+  void [statement, appealState, decisionText, statementText, page]
   await tf.usage()
   await tf.ping()
 
