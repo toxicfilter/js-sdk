@@ -164,3 +164,7 @@ function whatAVerdictSays(verdict: Verdict): void {
 void (null as unknown as Verdict).isToxic
 
 void [everyEndpoint, errorsAreClasses, webhooks, refusedByTheServer, whatAVerdictSays]
+
+// What the site does with refused content travels with the call.
+tf.text('hello', { restriction: 'removal' })
+tf.text('hello', { restriction: ['removal', 'account_suspended'] })

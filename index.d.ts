@@ -113,6 +113,9 @@ export interface VerdictContext {
   history?: { seen?: number; blocked?: number; adjustment?: number }
 }
 
+/** What a site does with refused content, as a statement of reasons states it. */
+export type Restriction = 'removal' | 'disabled' | 'demoted' | 'visibility' | 'account_suspended'
+
 /** The rules for one call instead of a stored policy. */
 export interface InlineRules {
   thresholds?: Record<string, { review?: number; block?: number }>
@@ -153,6 +156,12 @@ export interface CommonOptions {
    * throws away everything else the person wrote.
    */
   redact?: boolean
+  /**
+   * What your site does with the content if it is refused, for the statement of reasons:
+   * one measure, or a measure on the content plus `account_suspended`. Without it the rule
+   * that refused it says, then the project's default.
+   */
+  restriction?: Restriction | Restriction[]
   /**
    * The rules for this call instead of a stored policy. ONLY what you send is acted on:
    * a category you do not mention has no line at all. Sent with `policy`, they are laid
