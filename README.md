@@ -36,6 +36,31 @@ categories collapsed into one boolean is somebody else's policy in your code.
 > browser bundle it is public and anybody who reads it can spend your allowance. Moderate
 > on your backend and send the verdict to the page.
 
+## How hard it looks
+
+`effort` says how far a check may go, on every call, on a batch and on each of its items:
+
+| `effort` | What happens | Cost |
+|---|---|---|
+| `low` | The free checks only | 1 credit |
+| `medium` | The model reads only what the free checks left in doubt | 1 credit, plus the model's tokens when it reads |
+| `high` | The model reads everything not already refused on hard evidence | 1 credit, plus the model's tokens |
+
+Left out, it is your policy's default if it has one, then the kind's own: `medium` for text
+and conversations, `high` for images and prompts, `low` for names, emails, signups and links.
+Names, emails and links only take `low` (the types say so): anything else is a validation
+error with the code `effort_unavailable`. An image asked for at `medium` is read at `high`,
+and the answer says so.
+
+```js
+await tf.text(comment, { effort: 'low' })    // never the model
+await tf.text(listing, { effort: 'high' })   // the model reads it unless it was refused outright
+
+verdict.effort      // the level applied
+verdict.modelRead   // whether the model read it
+verdict.modelWhy    // 'settled', 'conversation_sampling', 'test_key' or 'unavailable', or null
+```
+
 ## What it does for you
 
 **Retries the right failures and never the wrong one.** A 429 or a 5xx is asked again with
@@ -64,9 +89,14 @@ try {
 
 A verdict reached without the model because the provider was failing comes back with
 `degraded` set, and is billed as the check alone: a check costs 1 credit, and only a model
-reading adds its tokens, rounded up. It is a separate field from `used_ai` on
-purpose: one says the cheap detectors were enough, the other says nobody read it, and only
-the first is reassuring. Hold or queue what matters to you when you see it.
+reading adds its tokens, rounded up. It is a separate statement from `modelRead` being
+false: `modelWhy` saying `settled` means the cheap detectors were enough, `degraded` means
+nobody could read it, and only the first is reassuring. Hold or queue what matters to you
+when you see it.
+
+In a conversation the model is sometimes allowed and deliberately not run (it reads a message
+when the free detectors found something, when a lead type is half there, or every few
+messages). That is a third statement, and `modelWhy` says it: `conversation_sampling`.
 
 ## Projects
 
@@ -119,7 +149,7 @@ verdict.context    // repeats, near-duplicates, the actor's record and what it m
 verdict.shadow     // what a policy you are trialling would have said. Never what happened
 verdict.facts      // noticed, not a finding: a language, an age signal, a fingerprint
 verdict.degraded   // part of the pipeline could not run
-verdict.model      // { asked, read, why } when the model was deliberately not run, else null
+verdict.model      // the model block as sent: { read: false, why: 'settled' }
 ```
 
 `redacted` is usually worth more than a refusal: throwing a whole comment away because it
@@ -175,7 +205,7 @@ await tf.conversation([
 const batch = await tf.batch([
   { kind: 'text', content: '...', reference: 'c_1' },
   { kind: 'image', url: '...', reference: 'p_2' },
-], { ai: false })
+], { effort: 'low' })
 
 batch.verdicts.forEach((verdict, index) => { /* ... */ })
 batch.failures.forEach((error, index) => { /* ... */ })   // index -1, -2... names no item

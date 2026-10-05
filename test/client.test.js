@@ -26,7 +26,8 @@ const VERDICT = {
   flagged: ['toxicity'],
   scores: { toxicity: 0.55 },
   signals: [{ category: 'toxicity', score: 0.55, detector: 'term', reason: 'Contains 1 profanity.' }],
-  used_ai: false,
+  effort: 'medium',
+  model: { read: false, why: 'settled' },
   took_ms: 2,
   cached: false,
   policy: { slug: 'house', version: 4 },
@@ -89,10 +90,10 @@ test('a conversation goes up as a conversation', async () => {
     { author: 'u5', content: 'no tienes ni idea' },
   ]
 
-  await tf.conversation(messages, { locales: ['es'], ai: false })
+  await tf.conversation(messages, { locales: ['es'], effort: 'low' })
 
   assert.equal(calls[0].url, 'https://example.test/api/v1/conversation')
-  assert.deepEqual(calls[0].body, { messages, locales: ['es'], ai: false })
+  assert.deepEqual(calls[0].body, { messages, locales: ['es'], effort: 'low' })
 })
 
 test('it reads the second axis', async () => {
@@ -230,7 +231,7 @@ test('a batch separates verdicts from failures', async () => {
     ],
   ])
 
-  const result = await tf.batch([{ kind: 'text', content: 'one' }, { kind: 'text' }], { ai: false })
+  const result = await tf.batch([{ kind: 'text', content: 'one' }, { kind: 'text' }], { effort: 'low' })
 
   assert.equal(result.finished, true)
   assert.equal(result.verdicts.get(0).reference, 'c_1')
@@ -684,18 +685,44 @@ test('the timeout covers the body, not just the headers', async () => {
   assert.equal(outcome.retryable, true)
 })
 
-test('the model block says it was deliberately not asked', async () => {
-  const { tf } = client([[200, { ...VERDICT, model: { asked: true, read: false, why: 'conversation_sampling' } }]])
+test('it says when the model was allowed and deliberately not run', async () => {
+  const { tf } = client([[200, { ...VERDICT, model: { read: false, why: 'conversation_sampling' } }]])
 
   const verdict = await tf.conversation([{ author: 'a', content: 'hi' }])
 
-  assert.deepEqual(verdict.model, { asked: true, read: false, why: 'conversation_sampling' })
+  assert.deepEqual(verdict.model, { read: false, why: 'conversation_sampling' })
+  assert.equal(verdict.modelRead, false)
+  assert.equal(verdict.modelWhy, 'conversation_sampling')
 })
 
-test('no model block is null', async () => {
-  const { tf } = client([[200, VERDICT]])
+test('it reads the effort applied and whether the model read it', async () => {
+  const { tf } = client([[200, { ...VERDICT, effort: 'high', model: { read: true } }]])
 
-  assert.equal((await tf.text('x')).model, null)
+  const verdict = await tf.image('https://example.test/a.png', { effort: 'medium' })
+
+  assert.equal(verdict.effort, 'high')
+  assert.equal(verdict.modelRead, true)
+  assert.equal(verdict.modelWhy, null)
+})
+
+test('no model block is null, and reads as not read', async () => {
+  const { model, effort, ...raw } = VERDICT
+  const { tf } = client([[200, raw]])
+
+  const verdict = await tf.text('x')
+
+  assert.equal(verdict.model, null)
+  assert.equal(verdict.effort, null)
+  assert.equal(verdict.modelRead, false)
+  assert.equal(verdict.modelWhy, null)
+})
+
+test('the effort option is sent as given', async () => {
+  const { tf, calls } = client([[200, VERDICT]])
+
+  await tf.text('x', { effort: 'low' })
+
+  assert.equal(calls[0].body.effort, 'low')
 })
 
 test('credits left is unknown, not zero, where the answer does not carry it', async () => {

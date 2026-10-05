@@ -21,12 +21,21 @@ export interface Signal {
   spans?: number[]
 }
 
-/** The model was asked for and deliberately not run on this call. */
-export interface ModelNotRead {
-  asked: boolean
+/**
+ * How far a check may go. `low`: the free checks only, 1 credit. `medium`: the model reads
+ * only what the free checks left in doubt. `high`: the model reads everything not already
+ * refused on hard evidence.
+ */
+export type Effort = 'low' | 'medium' | 'high'
+
+/** Why the model did not read a call although the effort allowed it. */
+export type ModelWhy = 'settled' | 'conversation_sampling' | 'test_key' | 'unavailable'
+
+/** Whether the model read this call, and why not when it could have. */
+export interface ModelBlock {
   read: boolean
-  /** Why not, e.g. `conversation_sampling`. */
-  why: string
+  /** Present only when `read` is false and the effort allowed reading. */
+  why?: ModelWhy | (string & {})
 }
 
 export interface PolicyRef {
@@ -135,8 +144,12 @@ export interface InlineRules {
  * so one shared options type let a request compile that could only ever fail.
  */
 export interface CommonOptions {
-  /** Whether the model may run. Text, images and conversations default to true, signups to false. */
-  ai?: boolean
+  /**
+   * How far the check may go. Absent means your policy's default, then the kind's own:
+   * `medium` for text and conversations, `high` for images and prompts, `low` for the rest.
+   * An image asked for at `medium` is read at `high`.
+   */
+  effort?: Effort
   /** Your own id for the thing being judged. Send it: it is how you find the verdict later. */
   reference?: string
   /** Which of your policies to judge under. Absent means the project's, then your default. */
@@ -185,15 +198,15 @@ export interface WithSurface {
   surface?: string
 }
 
-/** No model reads this kind, so `ai: true` is a 422 `ai_unavailable`. */
+/** No model reads this kind, so any effort but `low` is a 422 `effort_unavailable`. */
 export interface WithoutModel {
-  ai?: false
+  effort?: 'low'
 }
 
 export interface TextOptions extends CommonOptions, WithLocales, WithSurface {}
-export interface EmailOptions extends Omit<CommonOptions, 'ai'>, WithSurface, WithoutModel {}
-export interface NameOptions extends Omit<CommonOptions, 'ai'>, WithLocales, WithSurface, WithoutModel {}
-export interface UrlOptions extends Omit<CommonOptions, 'ai'>, WithSurface, WithoutModel {}
+export interface EmailOptions extends Omit<CommonOptions, 'effort'>, WithSurface, WithoutModel {}
+export interface NameOptions extends Omit<CommonOptions, 'effort'>, WithLocales, WithSurface, WithoutModel {}
+export interface UrlOptions extends Omit<CommonOptions, 'effort'>, WithSurface, WithoutModel {}
 export interface SignupFields extends CommonOptions, WithLocales, WithSurface {
   name?: string
   email?: string
@@ -254,16 +267,22 @@ export declare class Verdict {
   readonly facts: Record<string, unknown>
   /** Part of the pipeline could not run, usually the model. The verdict was reached with less. */
   readonly degraded: boolean
-  readonly usedAi: boolean
+  /** The effort applied, which is not always the one sent. `null` on a stored row that never knew it. */
+  readonly effort: Effort | null
+  /** Whether a model read it, or the cheap detectors settled it. */
+  readonly modelRead: boolean
+  /**
+   * Why the model did not read it although the effort allowed it: `settled`,
+   * `conversation_sampling`, `test_key` or `unavailable`. Not `degraded`, which says
+   * nobody could read it. `null` when it read it or the effort never allowed it.
+   */
+  readonly modelWhy: ModelWhy | (string & {}) | null
   readonly cached: boolean
   readonly charged: number
   /** Credits left after this call. `null` where the answer carries no balance: batch rows and stored records. */
   readonly creditsRemaining: number | null
-  /**
-   * Present when the model was asked for and deliberately not run, e.g. `why:
-   * 'conversation_sampling'`. Not `degraded`, which says nobody could read it. `null` otherwise.
-   */
-  readonly model: ModelNotRead | null
+  /** The model block as the API sent it, or `null` when the answer carries none. */
+  readonly model: ModelBlock | null
   readonly policy: PolicyRef
   /** The content with the personal data masked, when you asked for it. */
   readonly redacted: string | null

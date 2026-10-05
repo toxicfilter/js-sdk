@@ -267,16 +267,44 @@ export class Verdict {
 
   /**
    * Part of the pipeline could not run, usually the model. The verdict is still real; it
-   * was reached with less. Its own field rather than a quiet `used_ai: false`, so a caller
-   * who asked for a model can tell "it read this and found nothing" from "it never ran".
+   * was reached with less. Its own field rather than a quiet `modelRead` of false, so a
+   * caller whose effort allowed the model can tell "it read this and found nothing" from
+   * "it never ran".
    */
   get degraded() {
     return Boolean(this.raw.degraded)
   }
 
+  /**
+   * @returns {?string} The effort applied: `low`, `medium` or `high`, or null on a stored
+   * row that never knew it. Not always the one sent: an image asked for at `medium` is read
+   * at `high`.
+   */
+  get effort() {
+    return typeof this.raw.effort === 'string' ? this.raw.effort : null
+  }
+
   /** @returns {boolean} Whether a model read it, or the cheap detectors settled it. */
-  get usedAi() {
-    return Boolean(this.raw.used_ai)
+  get modelRead() {
+    return this.raw.model?.read === true
+  }
+
+  /**
+   * @returns {?string} Why the model did not read it although the effort allowed it, or
+   * null when it read it or the effort never allowed it.
+   *
+   * `settled` (the free checks were certain), `conversation_sampling` (in a conversation the
+   * model reads only when it adds something), `test_key` (test keys never reach the model)
+   * or `unavailable`. Not the same as `degraded`, which says nobody COULD read it.
+   */
+  get modelWhy() {
+    const model = this.raw.model
+
+    if (model === null || typeof model !== 'object' || model.read !== false) {
+      return null
+    }
+
+    return typeof model.why === 'string' ? model.why : null
   }
 
   /** @returns {boolean} Whether this content had been judged before. */
@@ -300,11 +328,8 @@ export class Verdict {
   }
 
   /**
-   * `{ asked, read, why }` when the model was asked for and deliberately not run on this
-   * call (`why: 'conversation_sampling'`), or null.
-   *
-   * Not the same as `degraded`, which says nobody COULD read it. Without this, a message
-   * the model chose to skip looked exactly like one the cheap detectors had settled.
+   * The model block as the API sent it, `{ read, why }`, or null when the answer carries
+   * none. `modelRead` and `modelWhy` read it for you.
    */
   get model() {
     return this.raw.model ?? null

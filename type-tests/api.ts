@@ -27,7 +27,7 @@ import {
 const tf = new ToxicFilter('tf_live_x', { baseUrl: 'https://toxicfilter.test', timeout: 5, maxWait: 10 })
 
 async function everyEndpoint(): Promise<void> {
-  const verdict: Verdict = await tf.text('hello', { locales: ['en'], surface: 'comment', ai: false })
+  const verdict: Verdict = await tf.text('hello', { locales: ['en'], surface: 'comment', effort: 'low' })
 
   // The three axes, each with its own shape.
   const decision: string = verdict.decision
@@ -118,8 +118,8 @@ async function refusedByTheServer(): Promise<void> {
   await tf.url('https://example.test', { locales: ['en'] })
   // @ts-expect-error - /v1/prompt IS the surface; a surface of your own is prohibited
   await tf.prompt('hello', { surface: 'comment' })
-  // @ts-expect-error - no model reads an address, so `ai: true` is a 422 `ai_unavailable`
-  await tf.email('a@example.com', { ai: true })
+  // @ts-expect-error - no model reads an address, so `effort: 'high'` is a 422 `effort_unavailable`
+  await tf.email('a@example.com', { effort: 'high' })
   // @ts-expect-error - the batch envelope has no `reference`; each item carries its own
   await tf.batch([{ kind: 'text', content: 'a' }], { reference: 'r' })
   // @ts-expect-error - nor does the async one
@@ -130,7 +130,7 @@ async function refusedByTheServer(): Promise<void> {
   await tf.batch([{ kind: 'email', content: 'a@example.com' }])
 
   // What each endpoint does take still compiles.
-  await tf.email('a@example.com', { surface: 'signup', ai: false, reference: 'r', idempotencyKey: 'k' })
+  await tf.email('a@example.com', { surface: 'signup', effort: 'low', reference: 'r', idempotencyKey: 'k' })
   await tf.url('https://example.test', { surface: 'bio' })
   await tf.prompt('hello', { locales: ['en'], rules: { thresholds: { prompt_injection: { block: 0.6 } } } })
   await tf.name('Ana', { locales: ['es'], surface: 'profile' })
@@ -153,7 +153,7 @@ function whatAVerdictSays(verdict: Verdict): void {
   const left: number | null = verdict.creditsRemaining
   // @ts-expect-error - and unknown is not zero
   const zero: number = verdict.creditsRemaining
-  const model: { asked: boolean; read: boolean; why: string } | null = verdict.model
+  const model: { read: boolean; why?: string } | null = verdict.model
 
   void [left, zero, model]
 }
