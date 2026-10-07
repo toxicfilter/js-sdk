@@ -141,6 +141,17 @@ const verdict = await tf.text(comment, {
 })
 ```
 
+Domain rules travel the same way: lists of domains or endings (`shop.example` covers its
+subdomains, `ru` everything under it), a domain registered recently, and what Cloudflare's
+filtering resolvers block. They apply to the links in a text, to `url()` and to the domain of
+an email address.
+
+```js
+const verdict = await tf.text(comment, {
+  rules: { domains: { block: ['ru'], young: { days: 30, action: 'review' }, malware: 'block' } },
+})
+```
+
 ## The rest of the answer
 
 ```js

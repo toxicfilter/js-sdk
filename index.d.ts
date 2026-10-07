@@ -134,6 +134,19 @@ export interface InlineRules {
   surfaces?: Record<string, Record<string, { review?: number; block?: number }>>
   /** What your business does, for the model to judge `off_topic` against. 500 characters. */
   business?: string
+  /**
+   * Where links and addresses may point. Lists take domains (`shop.example`, which covers
+   * its subdomains) or endings (`ru`). `young` acts on a domain registered fewer than
+   * `days` ago; `malware` and `adult` on one Cloudflare's filtering resolvers block.
+   */
+  domains?: {
+    block?: string[]
+    review?: string[]
+    allow?: string[]
+    young?: { days: number; action: 'block' | 'review' }
+    malware?: 'block' | 'review'
+    adult?: 'block' | 'review'
+  }
 }
 
 /**

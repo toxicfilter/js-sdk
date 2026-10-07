@@ -132,6 +132,11 @@ async function refusedByTheServer(): Promise<void> {
   // What each endpoint does take still compiles.
   await tf.email('a@example.com', { surface: 'signup', effort: 'low', reference: 'r', idempotencyKey: 'k' })
   await tf.url('https://example.test', { surface: 'bio' })
+  await tf.text('see shop.example', {
+    rules: { domains: { block: ['ru'], allow: ['partner.ru'], young: { days: 30, action: 'review' }, malware: 'block' } },
+  })
+  // @ts-expect-error - a domain rule blocks or holds, nothing else
+  await tf.url('https://example.test', { rules: { domains: { malware: 'delete' } } })
   await tf.prompt('hello', { locales: ['en'], rules: { thresholds: { prompt_injection: { block: 0.6 } } } })
   await tf.name('Ana', { locales: ['es'], surface: 'profile' })
   await tf.image('https://cdn.example.test/a.jpg', { surface: 'avatar' })
